@@ -266,7 +266,12 @@ print(f"The highest average temperature: {highestAverageTemperature}")
 
 # COMMAND ----------
 
-
+# MAGIC %md
+# MAGIC The average() function uses reduce() to sum up all the numbers in the list into a running pair of (sum, count). It starts with (0.0, 0), adding each value to the sum and incrementing the count at each step, and returns the sum divided by the count of elements at the end.
+# MAGIC
+# MAGIC This version is written in a functional style as opposed to the typical loop as it doesn't utilize mutable variables and is more compact. However, it's less readable for beginners and slightly less efficient.
+# MAGIC
+# MAGIC If the input list is empty, the function will return (0.0, 0) from reduce() and then try to divide by zero, giving a ZeroDivisionError. In this task, that can't occur because each sensor has at least one reading, but in other cases it could lead to an error.
 
 # COMMAND ----------
 
