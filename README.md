@@ -11,3 +11,9 @@ The course focuses on:
 
 ## ⚙️ Databricks Integration
 This repository is linked with my Databricks workspace.
+## ⚙️ For exercises, switch to branch exercise 
+bash
+```
+git checkout exercise
+```
+
