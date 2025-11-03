@@ -51,7 +51,16 @@ from pyspark.sql import Row
 
 # COMMAND ----------
 
-???
+data = [
+    ("Luna", "Cat", 3),
+    ("Max", "Dog", 5),
+    ("Charlie", "Parrot", 2),
+    ("Bella", "Rabbit", 4),
+    ("Rocky", "Turtle", 10)
+]
+columns = ["Name", "Species", "Age"]
+petsDF = spark.createDataFrame(data, columns)
+display(petsDF)
 
 # COMMAND ----------
 
@@ -89,13 +98,17 @@ from pyspark.sql import Row
 
 # COMMAND ----------
 
-numberDF: DataFrame = ???
+numberDF: DataFrame = spark.read.csv(
+    "abfss://shared@tunics320f2025gen2.dfs.core.windows.net/exercises/ex2/numbers/numbers.csv",
+    header=True,
+    inferSchema=True
+)
 
-???
+display(numberDF)
 
 # COMMAND ----------
 
-numberOfNumbers: int = ???
+numberOfNumbers: int = numberDF.count()
 
 print(f"Number of rows in the number DataFrame: {numberOfNumbers}")
 
@@ -147,14 +160,18 @@ print(f"Number of rows in the number DataFrame: {numberOfNumbers}")
 
 # COMMAND ----------
 
-weatherDF: DataFrame = ???
+weatherDF: DataFrame = spark.read.csv(
+    "abfss://shared@tunics320f2025gen2.dfs.core.windows.net/exercises/ex2/weather/nordics_weather.csv",
+    header=True,
+    inferSchema=True,
+    sep=";"
+)
 
-# Code that prints out the schema for weatherDF
-???
+weatherDF.printSchema()
 
 # COMMAND ----------
 
-weatherSample: list[Row] = ???
+weatherSample: list[Row] = weatherDF.take(5)
 
 print("The first five rows of the weather data:")
 print(*[list(row.asDict().values()) for row in weatherSample], sep="\n")  # prints each Row to its own line
@@ -195,8 +212,8 @@ print(*[list(row.asDict().values()) for row in weatherSample], sep="\n")  # prin
 
 # COMMAND ----------
 
-minTemp: float = ???
-maxTemp: float = ???
+minTemp: float = weatherDF.agg(F.min("temperature_min")).first()[0]
+maxTemp: float = weatherDF.agg(F.max("temperature_max")).first()[0]
 
 # COMMAND ----------
 
@@ -226,12 +243,16 @@ print(f"Maximum temperature is {maxTemp}")
 
 # COMMAND ----------
 
-weatherDFWithNewColumns: DataFrame = ???
+weatherDFWithNewColumns: DataFrame = weatherDF.withColumn(
+    "measurement_year", F.year("date")
+).withColumn(
+    "measurement_weekday", (F.dayofweek("date") + 5) % 7
+)
 
 # COMMAND ----------
 
 # code that prints out the schema for weatherDFWithNewColumns
-???
+weatherDFWithNewColumns.printSchema()
 
 # COMMAND ----------
 
@@ -262,7 +283,10 @@ weatherDFWithNewColumns: DataFrame = ???
 
 # COMMAND ----------
 
-yearlyTemperatureDF: DataFrame = ???
+yearlyTemperatureDF: DataFrame = weatherDFWithNewColumns.groupBy("measurement_year").agg(
+    F.min("temperature_min").alias("min_temperature"),
+    F.max("temperature_max").alias("max_temperature")
+).orderBy(F.col("measurement_year").desc())
 
 # COMMAND ----------
 
@@ -295,7 +319,13 @@ yearlyTemperatureDF.show()
 
 # COMMAND ----------
 
-avgFinlandDF: DataFrame = ???
+avgFinlandDF: DataFrame = weatherDFWithNewColumns.filter(
+    (F.col("country") == "Finland") & (F.col("measurement_year") == 2017)
+).groupBy("measurement_weekday").agg(
+    F.round(F.avg("precipitation"), 2).alias("avg_precipitation_cm"),
+    F.round(F.avg("snow_depth"), 2).alias("avg_snow_depth_mm")
+).orderBy("measurement_weekday")
+
 
 # COMMAND ----------
 
@@ -338,7 +368,13 @@ avgFinlandDF.show()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ???
+# MAGIC In data engineering, scaling refers to the process of enhancing a system’s ability to process a greater amount of data, user traffic, or workload. This is for making sure that a system functions well under increasing data volume increments.
+# MAGIC
+# MAGIC Horizontal scaling is a process where new systems/machines are added to a network in order to share a load. A cloud-based example of this is where new virtual machines are added to a network in order to process data simultaneously. It is like when a company hires additional junior engineers to perform the same tasks; overall capabilities will increase since the load will be shared across more individuals.
+# MAGIC
+# MAGIC While scaling vertically implies increasing the capabilities of a single machine, like increasing the power of the CPU, the RAM, or the storage. In cloud hosting, this means scaling a machine that is already in use by enhancing a virtual machine to a new instance type. This is equivalent to increasing a junior engineer to a senior one that is capable of handling tasks on his own.
+# MAGIC
+# MAGIC Scalability is beneficial in that it enables faster data processing, increased performance, and high reliability during peak loads. Conversely, scaling is accompanied by disadvantages, which include increased costs due to increased resource utilization, complexity in managing various systems, as well as maintaining data consistency across various systems.
 
 # COMMAND ----------
 
@@ -356,4 +392,5 @@ avgFinlandDF.show()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ???
+# MAGIC For this week's tasks, I used "code with assistant" from azurebricks itself to debug my own solutions as well as to get to know more about spark (in syntax way) and also to paraphrase my sentences in task 8, I used GPT 5.0.
+# MAGIC Regaring completing this task with other students, I did this on my own and have configured with my GitHub repo to record the files better.
