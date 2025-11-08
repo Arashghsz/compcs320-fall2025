@@ -65,26 +65,26 @@ from pyspark.sql import Row
 
 # COMMAND ----------
 
-weatherDF: DataFrame = ???
+weatherDF = spark.read.parquet("abfss://shared@tunics320f2025gen2.dfs.core.windows.net/exercises/ex3/weather/measurements/daily_weather.parquet")
 
-cityDF: DataFrame = ???
+cityDF = spark.read.csv("abfss://shared@tunics320f2025gen2.dfs.core.windows.net/exercises/ex3/weather/metadata/cities.csv", header=True, inferSchema=True)
 
-countryDF: DataFrame = ???
+countryDF = spark.read.csv("abfss://shared@tunics320f2025gen2.dfs.core.windows.net/exercises/ex3/weather/metadata/countries.csv", header=True, inferSchema=True)
 
 # COMMAND ----------
 
 print("The first 5 rows of the weather data")
-display(weatherDF.limit(5))
+weatherDF.show(5)
 
 # COMMAND ----------
 
 print("The first 5 rows of the city data")
-display(cityDF.limit(5))
+cityDF.show(5)
 
 # COMMAND ----------
 
 print("The first 5 rows of the country data")
-display(countryDF.limit(5))
+countryDF.show(5)
 
 # COMMAND ----------
 
