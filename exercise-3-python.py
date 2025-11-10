@@ -154,9 +154,9 @@ countryDF.show(5)
 
 # COMMAND ----------
 
-metadataDF: DataFrame = ???
+metadataDF: DataFrame = cityDF.join(countryDF, on="iso2", how="left")
 
-fullDF: DataFrame = ???
+fullDF: DataFrame = weatherDF.join(metadataDF, on="station_id", how="left")
 
 # COMMAND ----------
 
@@ -230,9 +230,27 @@ print(f"Number of rows in the full DataFrame: {fullDF.count()}")
 
 # COMMAND ----------
 
-coldDayDF: DataFrame = ???
+from pyspark.sql.window import Window
 
-hotDayDF: DataFrame = ???
+# Coldest day per country
+coldest_temp_window = Window.partitionBy("country")
+coldDayDF = (
+    fullDF.withColumn("coldest_temp", F.min("min_temp_c").over(coldest_temp_window))
+    .where(F.col("min_temp_c") == F.col("coldest_temp"))
+    .select("country", F.col("min_temp_c").alias("coldest_temp"), "date")
+    .distinct()
+    .orderBy("coldest_temp")
+)
+
+# Hottest day per country
+hottest_temp_window = Window.partitionBy("country")
+hotDayDF = (
+    fullDF.withColumn("hottest_temp", F.max("max_temp_c").over(hottest_temp_window))
+    .where(F.col("max_temp_c") == F.col("hottest_temp"))
+    .select("country", F.col("max_temp_c").alias("hottest_temp"), "date")
+    .distinct()
+    .orderBy(F.col("hottest_temp").desc())
+)
 
 # COMMAND ----------
 
@@ -306,9 +324,60 @@ hotDayDF.limit(10).show()
 
 # COMMAND ----------
 
-nordicExtremeDayDF: DataFrame = ???
+nordic_countries = ["Finland", "Sweden", "Norway", "Denmark", "Iceland"]
 
-nordicCapitalExtremeDF: DataFrame = ???
+# Part 1: All stations in Nordic countries
+nordicDF = fullDF.filter(F.col("country").isin(nordic_countries))
+
+nordicExtremeDayDF = (
+    nordicDF.groupBy("country")
+    .agg(
+        F.min("min_temp_c").alias("coldest_temp"),
+        F.min_by("date", "min_temp_c").alias("coldest_date"),
+        F.max("max_temp_c").alias("hottest_temp"),
+        F.max_by("date", "max_temp_c").alias("hottest_date"),
+        F.max("precipitation_mm").alias("max_rainfall"),
+        F.max_by("date", "precipitation_mm").alias("rainiest_date"),
+    )
+    .orderBy("country")
+)
+
+
+# Part 2: Only capital city measurements
+capitals = {
+    "Finland": "Helsinki",
+    "Sweden": "Stockholm",
+    "Norway": "Oslo",
+    "Denmark": "Copenhagen",
+    "Iceland": "Reykjavík"
+}
+
+nordicCapitalDF = fullDF.filter(
+    (F.col("country").isin(nordic_countries)) &
+    (F.col("city_name").isin(list(capitals.values())))
+)
+
+# Only include countries that actually have capital city measurements
+nordicCapitalExtremeDF = (
+    nordicCapitalDF.groupBy("country")
+    .agg(
+        F.min("min_temp_c").alias("coldest_temp"),
+        F.min_by("date", "min_temp_c").alias("coldest_date"),
+        F.max("max_temp_c").alias("hottest_temp"),
+        F.max_by("date", "max_temp_c").alias("hottest_date"),
+        F.max("precipitation_mm").alias("max_rainfall"),
+        F.max_by("date", "precipitation_mm").alias("rainiest_date"),
+    )
+    .orderBy("country")
+)
+
+# To check which capitals are missing measurements:
+missing_capitals = [
+    country for country, capital in capitals.items()
+    if nordicCapitalDF.filter((F.col("country") == country) & (F.col("city_name") == capital)).count() == 0
+]
+print("Nordic countries missing capital city measurements:", missing_capitals)
+
 
 # COMMAND ----------
 
@@ -378,9 +447,75 @@ nordicCapitalExtremeDF.show()
 
 # COMMAND ----------
 
-threeDryMonthsDF: DataFrame = ???
+# Get capital city and its latitude for each country
+capital_city_latDF = (
+    countryDF.join(
+        cityDF,
+        (countryDF.capital == cityDF.city_name) & (countryDF.iso2 == cityDF.iso2),
+        "inner"
+    )
+    .select(
+        countryDF.country.alias("country_name"),
+        countryDF.capital,
+        cityDF.latitude.cast("double").alias("capital_latitude")
+    )
+    .distinct()
+)
 
-southernDryCountries: list[str] = ???
+# Join fullDF with capital info to get only capital measurements
+capitalWeatherDF = (
+    fullDF.join(
+        capital_city_latDF,
+        (fullDF.country == capital_city_latDF.country_name) & (fullDF.city_name == capital_city_latDF.capital),
+        "inner"
+    )
+    .withColumn("year", F.year("date"))
+    .withColumn("month", F.month("date"))
+)
+
+# Only 2022
+capitalWeather2022DF = capitalWeatherDF.filter(F.col("year") == 2022)
+
+# For each country, month: count days, count dry days, get number of days in month
+days_in_month_expr = F.dayofmonth(F.last_day(F.col("date")))
+
+monthlyDryDF = (
+    capitalWeather2022DF
+    .groupBy("country", "month")
+    .agg(
+        F.countDistinct("date").alias("days_measured"),
+        F.sum((F.col("precipitation_mm") <= 0).cast("int")).alias("dry_days"),
+        F.max(days_in_month_expr).alias("days_in_month")
+    )
+    .where((F.col("days_measured") == F.col("days_in_month")) & (F.col("dry_days") == F.col("days_in_month")))
+)
+
+# Part 1: Count fully dry months per country, filter for at least 3
+threeDryMonthsDF = (
+    monthlyDryDF
+    .groupBy("country")
+    .agg(F.count("*").alias("dry_month_count"))
+    .where(F.col("dry_month_count") >= 3)
+    .orderBy(F.col("dry_month_count").desc(), F.col("country"))
+)
+
+# Part 2: Southern hemisphere capitals with at least one fully dry month
+southern_capitals = (
+    capital_city_latDF
+    .filter(F.col("capital_latitude") < 0)
+    .select(F.col("country_name").alias("country"))
+    .distinct()
+)
+
+southernDryCountries = (
+    monthlyDryDF
+    .join(southern_capitals, "country")
+    .select("country")
+    .distinct()
+    .orderBy("country")
+    .rdd.map(lambda row: row["country"])
+    .collect()
+)
 
 # COMMAND ----------
 
@@ -482,7 +617,7 @@ for country in southernDryCountries:
 
 # COMMAND ----------
 
-procemDF: DataFrame = ???
+procemDF = spark.read.parquet("abfss://shared@tunics320f2025gen2.dfs.core.windows.net/exercises/ex3/procem/procem_iotdb.parquet")
 
 # COMMAND ----------
 
@@ -491,7 +626,22 @@ procemDF.limit(6).show()
 
 # COMMAND ----------
 
-hourlyDF: DataFrame = ???
+hourlyDF = (
+    procemDF
+    .withColumn("Time_ts", F.from_unixtime((F.col("Time") / 1000).cast("long")).cast("timestamp"))
+    .withColumn("hour", F.date_trunc("hour", F.col("Time_ts")))
+    .groupBy("hour")
+    .agg(
+        F.avg("Temperature").alias("AvgTemperature"),
+        (F.avg("SolarPower") / 1000).alias("ProducedEnergy"),
+        (
+            (F.avg("WaterCooling01Power") + F.avg("WaterCooling02Power") + F.avg("VentilationPower")) / 1000
+        ).alias("ConsumedEnergy"),
+        F.max("ElectricityPrice").alias("Price")
+    )
+    .withColumnRenamed("hour", "Time")
+    .orderBy("Time")
+)
 
 # COMMAND ----------
 
@@ -579,9 +729,31 @@ hourlyDF.limit(8).show(8, False)
 
 # COMMAND ----------
 
-dailyDF: DataFrame = ???
+# Calculate hourly energy bought from market and hourly cost
+hourlyWithCostDF = (
+    hourlyDF
+    .withColumn("EnergyFromMarket", F.col("ConsumedEnergy") - F.col("ProducedEnergy"))
+    .withColumn(
+        "HourlyCost",
+        (F.when(F.col("EnergyFromMarket") > 0, F.col("EnergyFromMarket")).otherwise(0) * F.col("Price") / 1000)
+    )
+    .withColumn("Date", F.date_format("Time", "yyyy-MM-dd"))
+)
+# Aggregate to daily level
+dailyDF = (
+    hourlyWithCostDF
+    .groupBy("Date")
+    .agg(
+        F.round(F.avg("AvgTemperature"), 2).alias("Temperature"),
+        F.round(F.sum("ProducedEnergy"), 2).alias("ProducedEnergy"),
+        F.round(F.sum("ConsumedEnergy"), 2).alias("ConsumedEnergy"),
+        F.round(F.sum("HourlyCost"), 2).alias("DailyCost")
+    )
+    .orderBy("Date")
+)
 
-totalPrice: float = ???
+# Calculate total price for the week
+totalPrice = dailyDF.agg(F.round(F.sum("DailyCost"), 2)).first()[0]
 
 # COMMAND ----------
 
@@ -629,7 +801,7 @@ print(f"Total price: {totalPrice} €")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ???
+# MAGIC At first, I thought what is the point of using Spart over Pandas. When we got to the 2nd and 3rd exercise, I could see the difference. For big data, Spark is used as it uses clustered RAM and splits the tasks into different units of CPU which is greate when you have like 1 million of data in a dataset or more which you cannot use Pandas due to RAM limitation issues. Overall I'd say Spark is great for large-scale distributed data processing but **can be unnecessarily complex, resource-heavy, and slower for smaller datasets**.
 
 # COMMAND ----------
 
@@ -647,4 +819,5 @@ print(f"Total price: {totalPrice} €")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ???
+# MAGIC I have used code assistant of Azure in some parts of the tasks to get the better syntax. It did not help me with the syntax at all as I wanted to simplify my own code. I did the exercise on my own, without any groups.
+# MAGIC I also used code assistant for task 7 which I get a bit different result than the example output. I hope that is also acceptable as I spent a lot of time on that to get this work.
