@@ -111,10 +111,8 @@ print(*[line[:100] for line in lines7], sep="\n")
 
 # COMMAND ----------
 
-wordsRDD = wikitextsRDD.flatMap(lambda line: line.split())
-wordsRDD = wordsRDD.filter(lambda word: not any(ch.isdigit() for ch in word))
-wordsRDD = wordsRDD.filter(lambda word: len(word) > 0)
-
+wordsRDD = wikitextsRDD.flatMap(lambda line: line.split(' '))
+wordsRDD = wordsRDD.filter(lambda word: len(word) > 0 and not re.search(r'[0-9]', word))
 numberOfWords: int = wordsRDD.count()
 numberOfDistinctWords: int = wordsRDD.distinct().count()
 
@@ -282,19 +280,16 @@ wikitextsDF.show(7)
 
 # COMMAND ----------
 
-from pyspark.sql import functions as F
-
-splitDF = wikitextsDF.select(F.explode(F.split(F.col("value"), r"\s+")).alias("raw_word"))
-
-cleanedDF = splitDF.withColumn("word",
-                               F.lower(
-                                   F.regexp_replace(F.col("raw_word"), r"[^A-Za-z']+", "")
-                               ))
-
-wordsDF = cleanedDF.filter((F.length(F.col("word")) > 0) & (~F.col("word").rlike(r"\d"))).select("word")
+wordsDF = wikitextsDF.select(
+    F.explode(F.split(F.col("value"), r"\s+")).alias("word")
+)
+wordsDF = wordsDF.filter(
+    (F.length(F.col("word")) > 0) &
+    (~F.col("word").rlike(r"[0-9]"))
+)
 
 wordsInDF = wordsDF.count()
-distinctWordsInDF = wordsDF.select("word").distinct().count()
+distinctWordsInDF = wordsDF.distinct().count()
 
 
 # COMMAND ----------
@@ -520,8 +515,16 @@ for digitAverage in digitAverages:
 
 # COMMAND ----------
 
+
+
+# COMMAND ----------
+
 # MAGIC %md
-# MAGIC ???
+# MAGIC When working with Spark, any operation is either a transformation or an action. A transformation is something that creates a new dataset from an existing one but does not execute the computation just yet. Examples are map(), filter(), or select(). They just describe what should happen, but Spark doesn't execute anything immediately. An action, however, triggers real computation. Examples include count(), collect(), or take(). Actions force Spark to run all the transformations that were waiting.
+# MAGIC
+# MAGIC Spark works using a concept called lazy evaluation. What this means is Spark waits to compute things until it really needs to. This is the opposite of eager evaluation, in which operations run immediately. Lazy evaluation allows Spark to optimize the whole workflow and avoid doing unnecessary work. And it's also why nothing seems to "happen" when we apply transformations and probably they only run when an action is called.
+# MAGIC
+# MAGIC Understanding this matters because many beginners as me get confused, as I did when starting these exercises and found that code doesn't seem to do anything. I was initially puzzled for why Spark didn't show results, why counts only updated after actions, and why the RDD and DataFrame operations behaved differently than regular Python code. Realizing that Spark is building a plan first and executing later makes these concepts much clearer.
 
 # COMMAND ----------
 
