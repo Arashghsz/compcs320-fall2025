@@ -63,11 +63,11 @@ from pyspark.sql.types import DoubleType, IntegerType, StringType
 
 # COMMAND ----------
 
-wikitextsRDD: RDD[str] = ???
+wikitextsRDD: RDD[str] = sc.textFile("abfss://shared@tunics320f2025gen2.dfs.core.windows.net/exercises/ex4/wiki/").filter(lambda line: line.strip() != "")
 
-numberOfLines: int = ???
+numberOfLines: int = wikitextsRDD.count()
 
-lines7: list[str] = ???
+lines7: list[str] = wikitextsRDD.take(7)
 
 # COMMAND ----------
 
@@ -111,11 +111,13 @@ print(*[line[:100] for line in lines7], sep="\n")
 
 # COMMAND ----------
 
-wordsRDD: RDD[str] = ???
+wordsRDD = wikitextsRDD.flatMap(lambda line: line.split())
+wordsRDD = wordsRDD.filter(lambda word: not any(ch.isdigit() for ch in word))
+wordsRDD = wordsRDD.filter(lambda word: len(word) > 0)
 
-numberOfWords: float = ???
+numberOfWords: int = wordsRDD.count()
+numberOfDistinctWords: int = wordsRDD.distinct().count()
 
-numberOfDistinctWords: float = ???
 
 # COMMAND ----------
 
@@ -145,9 +147,19 @@ print(f"The total number of distinct words not containing digits: {numberOfDisti
 
 # COMMAND ----------
 
-wordCountRDD: RDD[tuple[str, int]] = ???
+wordCountRDD: RDD[tuple[str, int]] = (
+    wordsRDD
+        .map(lambda w: (w, 1))
+        .reduceByKey(lambda a, b: a + b)
+)
 
-askedWord, wordCount = ???
+filteredWordsRDD = wordCountRDD.filter(
+    lambda pair: len(pair[0]) == 8 and 
+                 pair[0].startswith("s") and 
+                 pair[0] != "software"
+)
+
+askedWord, wordCount = filteredWordsRDD.max(key=lambda pair: pair[1])
 
 # COMMAND ----------
 
@@ -177,7 +189,16 @@ print(f"The most common 8-letter word that is not 'software' and starts with 's'
 
 # COMMAND ----------
 
-digitsRDD: RDD[tuple[int, float]] = ???
+numLines: int = wikitextsRDD.count()
+
+digitsRDD: RDD[tuple[int, float]] = (
+    wikitextsRDD
+    .flatMap(lambda line: [(d, line.count(d)) for d in "0123456789"])
+    .reduceByKey(lambda a, b: a + b)
+    .map(lambda x: (int(x[0]), x[1] / numLines))
+    .sortBy(lambda x: x[1], ascending=False)
+)
+
 
 # COMMAND ----------
 
@@ -237,11 +258,17 @@ for row in digitsRDD.collect():
 
 # COMMAND ----------
 
-wikitextsDF: DataFrame = ???
+from pyspark.sql import functions as F
 
-linesInDF: int = ???
+wikitextsDF = spark.read.text("abfss://shared@tunics320f2025gen2.dfs.core.windows.net/exercises/ex4/wiki/")
 
-first7Lines: list[str] = ???
+wikitextsDF = wikitextsDF.filter(F.length(F.trim(F.col("value"))) > 0)
+
+linesInDF = wikitextsDF.count()
+
+first7Rows = wikitextsDF.select("value").limit(7).collect()
+first7Lines = [r["value"] for r in first7Rows]
+
 
 # COMMAND ----------
 
@@ -255,11 +282,20 @@ wikitextsDF.show(7)
 
 # COMMAND ----------
 
-wordsDF: DataFrame = ???
+from pyspark.sql import functions as F
 
-wordsInDF: int = ???
+splitDF = wikitextsDF.select(F.explode(F.split(F.col("value"), r"\s+")).alias("raw_word"))
 
-distinctWordsInDF: int = ???
+cleanedDF = splitDF.withColumn("word",
+                               F.lower(
+                                   F.regexp_replace(F.col("raw_word"), r"[^A-Za-z']+", "")
+                               ))
+
+wordsDF = cleanedDF.filter((F.length(F.col("word")) > 0) & (~F.col("word").rlike(r"\d"))).select("word")
+
+wordsInDF = wordsDF.count()
+distinctWordsInDF = wordsDF.select("word").distinct().count()
+
 
 # COMMAND ----------
 
@@ -325,11 +361,51 @@ class WordCount:
     word: str
     count: int
 
+wordCountDF = (
+    wordsDF
+    .groupBy("word")
+    .count()
+    .withColumnRenamed("count", "count")
+    .withColumnRenamed("word", "word")
+)
+
+filteredWordDF = (
+    wordCountDF
+    .filter(
+        (F.length("word") == 8) &
+        (F.col("word").startswith("s")) &
+        (F.col("word") != "software")
+    )
+    .orderBy(F.desc("count"))
+    .limit(1)
+)
+
+askedWordCountRow = filteredWordDF.first()
+askedWordCount = WordCount(word=askedWordCountRow["word"], count=askedWordCountRow["count"])
+
 # COMMAND ----------
 
-wordCountDF: DataFrame = ???
+wordCountDF: DataFrame = (
+    wordsDF
+    .groupBy("word")
+    .count()
+    .withColumnRenamed("count", "count")
+    .withColumnRenamed("word", "word")
+)
 
-askedWordCount: WordCount = ???
+filteredWordDF = (
+    wordCountDF
+    .filter(
+        (F.length("word") == 8) &
+        (F.col("word").startswith("s")) &
+        (F.col("word") != "software")
+    )
+    .orderBy(F.desc("count"))
+    .limit(1)
+)
+
+askedWordCountRow = filteredWordDF.first()
+askedWordCount = WordCount(word=askedWordCountRow["word"], count=askedWordCountRow["count"])
 
 # COMMAND ----------
 
@@ -369,11 +445,35 @@ class DigitAverage:
     digit: int
     average: float
 
+digit_counts_exprs = [
+    F.sum(F.length(F.col("value")) - F.length(F.regexp_replace(F.col("value"), str(d), ""))).alias(f"count_{d}")
+    for d in range(10)
+]
+
+digit_counts_row = wikitextsDF.agg(*digit_counts_exprs).first()
+num_lines = wikitextsDF.count()
+
+digit_averages = [
+    (d, digit_counts_row[f"count_{d}"] / num_lines)
+    for d in range(10)
+]
+
 # COMMAND ----------
 
-digitDF: DataFrame = ???
+digitDF = spark.createDataFrame(
+    [
+        (d, digit_counts_row[f"count_{d}"] / num_lines)
+        for d in range(10)
+    ],
+    ["digit", "average"]
+).orderBy(F.desc("average"))
 
-digitAverages: list[DigitAverage] = ???
+# display(digitDF)
+
+digitAverages: list[DigitAverage] = [
+    DigitAverage(digit=row["digit"], average=row["average"])
+    for row in digitDF.collect()
+]
 
 # COMMAND ----------
 
@@ -439,4 +539,4 @@ for digitAverage in digitAverages:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ???
+# MAGIC This topic was new to me that I had to use some AI to solve some parts of the exercise. That being said, I used some code assistant from databricks to help me out and understand the idea behind RDD and how does this defer from previous Spark way.
