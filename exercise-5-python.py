@@ -106,10 +106,8 @@ dataRDD: RDD[Row] = spark.sparkContext.parallelize(dataRows)
 
 # COMMAND ----------
 
-dataDF: DataFrame = ???
-
-trainingDF: DataFrame = ???
-testDF: DataFrame = ???
+dataDF: DataFrame = dataRDD.toDF(["X", "label"])
+trainingDF, testDF = dataDF.randomSplit([0.8, 0.2], seed=42)
 
 # COMMAND ----------
 
@@ -154,9 +152,11 @@ trainingDF.limit(6).show()
 
 # COMMAND ----------
 
-vectorAssembler: VectorAssembler = ???
+vectorAssembler: VectorAssembler = VectorAssembler(inputCols=["X"], outputCol="features")
+assembledTrainingDF: DataFrame = vectorAssembler.transform(trainingDF)
 
-assembledTrainingDF: DataFrame = ???
+lr: LinearRegression = LinearRegression(featuresCol="features", labelCol="label")
+lrModel: LinearRegressionModel = lr.fit(assembledTrainingDF)
 
 # COMMAND ----------
 
@@ -166,9 +166,9 @@ assembledTrainingDF.limit(6).show()
 
 # COMMAND ----------
 
-lr: LinearRegression = ???
+lr: LinearRegression = LinearRegression(featuresCol="features", labelCol="label")
 
-lrModel: LinearRegressionModel = ???
+lrModel: LinearRegressionModel = lr.fit(assembledTrainingDF)
 
 # COMMAND ----------
 
@@ -226,9 +226,11 @@ lrModel.summary.predictions.limit(6).show()
 
 # COMMAND ----------
 
-testPredictions: DataFrame = ???
+assembledTestDF: DataFrame = vectorAssembler.transform(testDF)
+testPredictions: DataFrame = lrModel.transform(assembledTestDF)
 
-testError: float = ???
+evaluator = RegressionEvaluator(labelCol="label", predictionCol="prediction", metricName="rmse")
+testError: float = evaluator.evaluate(testPredictions)
 
 # COMMAND ----------
 
@@ -288,7 +290,10 @@ pyplot.show()
 
 # COMMAND ----------
 
-newPredictions: DataFrame = ???
+newX = [-2.8, 3.14, 9.9, 11.11, 22.22, 123.45]
+newDF = spark.createDataFrame([(float(x),) for x in newX], ["X"])
+newAssembledDF = vectorAssembler.transform(newDF)
+newPredictions: DataFrame = lrModel.transform(newAssembledDF)
 
 # COMMAND ----------
 
@@ -346,9 +351,22 @@ newPredictions.select("X", "prediction").show()
 
 # COMMAND ----------
 
-staticSalesDF: DataFrame = ???
+staticSalesDF = (
+    spark.read
+         .option("header", True)
+         .option("inferSchema", True)
+         .option("sep", ";")  #spliter
+         .csv("abfss://shared@tunics320f2025gen2.dfs.core.windows.net/exercises/ex5/static/superstore_sales.csv")
+)
+staticBestDaysDF: DataFrame = (
+    staticSalesDF
+    .withColumn("totalSales", F.col("productPrice") * F.col("productCount"))
+    .groupBy("orderDate")
+    .agg(F.sum("totalSales").alias("totalSales"))
+    .orderBy(F.desc("totalSales"))
+    .limit(8)
+)
 
-staticBestDaysDF: DataFrame = ???
 
 # COMMAND ----------
 
@@ -360,16 +378,24 @@ staticBestDaysDF.show()
 
 # identifier for your target folder to separate your streaming test from the others running at the same time
 # this should only contain alphanumeric characters or underscores
-myStreamingIdentifier: str = ???  # for example: "my_very_unique_identifier" or "firstname_lastname"
+myStreamingIdentifier: str = "arash_ghasemzadehkakroudi"  # for example: "my_very_unique_identifier" or "firstname_lastname"
 
 # setup the address for your folder in the students container in the Azure storage
 myStreamingFolder: str = f"abfss://students@tunics320f2025gen2.dfs.core.windows.net/ex5/{myStreamingIdentifier}/"
 # Ensure the folder exists and is empty in the Azure storage when creating the streaming data frame
+# Get the structure (schema) from the static data
+salesSchema = staticSalesDF.schema
 dbutils.fs.mkdirs(myStreamingFolder)
 removeFiles(myStreamingFolder)
 
-
-streamingSalesDF: DataFrame = ???
+# STEP 3: Create streaming DataFrame WITH the schema
+streamingSalesDF: DataFrame = (
+    spark.readStream
+        .schema(salesSchema)           # Tell Spark the structure
+        .option("header", False)       # Streaming files have NO header row
+        .option("sep", ";")
+        .csv(myStreamingFolder)
+)
 
 # COMMAND ----------
 
@@ -406,7 +432,16 @@ streamingSalesDF: DataFrame = ???
 
 # COMMAND ----------
 
-streamingBestDaysDF: DataFrame = ???
+streamingBestDaysDF: DataFrame = (
+    streamingSalesDF
+    .withColumn("totalSales", F.col("productPrice") * F.col("productCount"))
+    .groupBy("orderDate")
+    .agg(
+        F.sum("totalSales").alias("totalSales"),
+        F.sum("productCount").alias("totalItemsSold")
+    )
+    .orderBy(F.desc("totalSales"))
+)
 
 # COMMAND ----------
 
@@ -459,26 +494,30 @@ def copyFiles(streamingQueryName: str, targetFolder: str) -> None:
 
 # COMMAND ----------
 
-# remove all files from myStreamingFolder before starting the streaming query to have a fresh run each time
+# Clean the folder
 removeFiles(myStreamingFolder)
 
-# set up a unique identifier for the streaming query defined below (should only contain alphanumeric characters or underscores)
+# Set query name
 streamQueryName: str = f"ex5_{myStreamingIdentifier}"
 
+# START the streaming query
+myStreamingQuery: StreamingQuery = (
+    streamingBestDaysDF
+    .writeStream
+    .format("memory")                    # Store results in memory
+    .queryName(streamQueryName)          # Give it a name
+    .outputMode("complete")              # Show complete results each time
+    .start()
+)
 
-# start the streaming query with the memory format and the query name set to the value of `streamQueryName`
-myStreamingQuery: StreamingQuery = ???
-
-
-# call the helper function to copy files to the target folder to simulate a streaming data
-# the helper function will also show the current state of the streaming query after each copied file
+# Copy files (simulates streaming data arriving)
 copyFiles(streamQueryName, myStreamingFolder)
 
-# show the final state of the streaming query
+# Show final results
 print("Final state of the streaming query before stopping:")
 showQueryState(streamQueryName)
 
-# stop the streaming query to avoid the notebook running indefinitely
+# STOP the query
 myStreamingQuery.stop()
 
 # COMMAND ----------
@@ -585,7 +624,11 @@ myStreamingQuery.stop()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ???
+# MAGIC - Use RDDs when you want to have full control over the way data is processed, or in the case of unstructured data that does not fit a tabular format. If you are processing raw text files with custom parsing logic, for example, or binary data, RDDs provide the flexibility to define exactly how each element should be processed. They can also be useful when you need to apply very low-level transformations that are difficult or impossible to express using the DataFrame API.
+# MAGIC On the other hand, most of the work should be done by default with DataFrames-especially if your data is structured or semi-structured, as might come from a CSV file, database, or JSON. DataFrames also have some great performance advantages in that Spark's Catalyst optimizer can automatically optimize your queries for you. This isn't possible with RDDs. They have a much more intuitive and readable API with SQL-like operations such as select, filter, groupBy, and join. In practice, unless you're working with truly unstructured data or need to use extremely specific control, DataFrames are faster, easier to write, and easier to maintain.
+# MAGIC
+# MAGIC
+# MAGIC - A basic difference between processing static and streaming data is that the former is a full and fixed dataset that one processes once, while the latter arrives continuously over time and requires continuous processing. In other words, with static data, you know the full scope of your dataset from the very beginning, knowing that after a single pass of processing, you can have final results. Streaming data, however, is unbounded, keeps growing, and your processing should be continuous, too, with results changing every moment with new chunks of data coming in. It is like analyzing a complete sales report at the end of the year versus monitoring sales in real time over the course of the year. Spark does impose several limitations on streaming data when compared to static data. The immediate limitation we encountered in this exercise is that Spark cannot infer the schema for streaming data. Instead, you must explicitly provide it (as we did in Task 5 by extracting the schema from the static data first). Several operations that work fine in a batch are either impossible or very restricted with streaming: for instance, you cannot sort an entire unbounded stream or count all rows since the data never stops coming. Other operations, such as multiple sequential aggregations or certain types of joins are also more complex or severely limited. Another limitation is that streaming queries require careful management of state, such as maintaining running totals, which consumes more memory and adds complexity. Finally, the output modes for streaming are more restricted: not all combinations of operations and output modes are supported, that's why we had to use "complete" mode with our aggregations in Task 7.
 
 # COMMAND ----------
 
@@ -603,4 +646,5 @@ myStreamingQuery.stop()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ???
+# MAGIC - This topic was also a bit new to me that I had to use some AI to solve some parts of the exercise. That being said, I used some code assistant from databricks plus claude sonnet 4.5 to help me out and understand the idea behind RDD and how does this defer from previous Spark way.
+# MAGIC - I also did this exercise solo.
