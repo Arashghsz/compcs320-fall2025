@@ -128,7 +128,7 @@ def getTestDF(
 # COMMAND ----------
 
 # Fill in your name (or some other unique identifier). This will be used to identify your target folder for the exercise.
-student_name: str = ???
+student_name: str = "Arash"
 
 source_path: str = "abfss://shared@tunics320f2025gen2.dfs.core.windows.net/exercises/ex6/"
 target_path: str = f"abfss://students@tunics320f2025gen2.dfs.core.windows.net/ex6/{student_name}/"
@@ -139,7 +139,11 @@ data_name: str = "accidents"
 source_csv_folder: str = source_path + f"{data_name}_csv"
 
 # create and display the data from CSV source
-df_csv: DataFrame = ???
+df_csv: DataFrame = spark.read.format("csv") \
+    .option("header", True) \
+    .option("sep", "|") \
+    .option("inferSchema", True) \
+    .load(source_csv_folder)
 
 display(df_csv)
 
@@ -150,7 +154,7 @@ display(df_csv)
 source_parquet_folder: str = source_path + f"{data_name}_parquet"
 
 # create and display the data from Parquet source
-df_parquet: DataFrame = ???
+df_parquet: DataFrame = spark.read.parquet(source_parquet_folder)
 
 display(df_parquet)
 
@@ -239,10 +243,10 @@ target_file_csv: str = target_path + data_name + "_csv"
 target_file_parquet: str = target_path + data_name + "_parquet"
 
 # write the data from part 1 in CSV format to the path given by target_file_csv
-???
+df_csv.write.mode("overwrite").option("header", True).option("sep", "|").csv(target_file_csv)
 
 # write the data from part 1 in Parquet format to the path given by target_file_parquet
-???
+df_csv.write.mode("overwrite").parquet(target_file_parquet)
 
 # COMMAND ----------
 
@@ -299,10 +303,20 @@ los_angeles_rows: int = 75
 chicago_rows: int = 50
 
 # New data frame with Los Angeles accidents that will be appended to the storage
-df_new_rows_los_angeles: DataFrame = ???
+df_new_rows_los_angeles: DataFrame = (
+    df_csv.filter(F.col("City") == "Los Angeles")
+    .orderBy(F.col("Start_Time").desc())
+    .limit(los_angeles_rows)
+    .withColumn("ID", F.concat(F.col("ID"), F.lit("_Z1")))
+)
 
 # New data frame with Chicago accidents that will be appended to the storage
-df_new_rows_chicago: DataFrame = ???
+df_new_rows_chicago: DataFrame = (
+    df_csv.filter(F.col("City") == "Chicago")
+    .orderBy(F.col("Start_Time").asc())
+    .limit(chicago_rows)
+    .withColumn("ID", F.concat(F.col("ID"), F.lit("_Z1")))
+)
 
 # COMMAND ----------
 
@@ -314,18 +328,22 @@ df_new_rows_chicago.show(2)
 
 # Append the new rows to CSV storage:
 # important to consistently use the same header and column separator options when using CSV storage
-???
+df_new_rows_los_angeles.unionByName(df_new_rows_chicago).write.mode("append").option("header", True).option("sep", "|").csv(target_file_csv)
 
 # Append the new rows to Parquet storage:
-???
+df_new_rows_los_angeles.unionByName(df_new_rows_chicago).write.mode("append").parquet(target_file_parquet)
 
 # COMMAND ----------
 
 # Read the merged data from the CSV files to check that the new rows have been stored
-df_new_csv: DataFrame = ???
+df_new_csv: DataFrame = spark.read.format("csv") \
+    .option("header", True) \
+    .option("sep", "|") \
+    .option("inferSchema", True) \
+    .load(target_file_csv)
 
 # Read the merged data from the Parquet files to check that the new rows have been stored
-df_new_parquet: DataFrame = ???
+df_new_parquet: DataFrame = spark.read.parquet(target_file_parquet)
 
 # COMMAND ----------
 
@@ -386,7 +404,15 @@ print(f"Old Parquet DF had {df_parquet.count()} rows and new DF has {df_new_parq
 # COMMAND ----------
 
 # A new data frame with modified rows
-df_modified: DataFrame = ???
+df_modified: DataFrame = (
+    df_new_rows_los_angeles.unionByName(df_new_rows_chicago)
+    .withColumn("ID", F.regexp_replace("ID", "_Z1$", "_Z2"))
+    .withColumn("AddedColumn1", F.concat(F.lit("prefix-"), F.col("City")))
+    .withColumn("AddedColumn2", F.lit("New column"))
+    .withColumnRenamed("Temperature_F", "Temperature_C")
+    .withColumn("Temperature_C", ((F.col("Temperature_C") - 32) / 9 * 5))
+    .drop("Description")
+)
 
 # COMMAND ----------
 
@@ -400,10 +426,10 @@ df_modified.limit(3).show()
 # COMMAND ----------
 
 # Append the new modified rows to CSV storage:
-???
+df_modified.write.mode("append").option("header", True).option("sep", "|").csv(target_file_csv)
 
 # Append the new modified rows to Parquet storage:
-???
+df_modified.write.mode("append").parquet(target_file_parquet)
 
 # COMMAND ----------
 
@@ -483,7 +509,11 @@ printStorage(target_file_parquet)
 # COMMAND ----------
 
 # Read in the CSV data again from the CSV storage: target_file_csv
-modified_csv_df: DataFrame = ???
+modified_csv_df: DataFrame = spark.read.format("csv") \
+    .option("header", True) \
+    .option("sep", "|") \
+    .option("inferSchema", True) \
+    .load(target_file_csv)
 
 # COMMAND ----------
 
@@ -501,7 +531,7 @@ getTestDF(modified_csv_df).show()
 # COMMAND ----------
 
 # Read in the Parquet data again from the Parquet storage: target_file_parquet
-modified_parquet_df: DataFrame = ???
+modified_parquet_df: DataFrame = spark.read.parquet(target_file_parquet)
 
 # COMMAND ----------
 
@@ -606,16 +636,56 @@ getTestDF(modified_parquet_df).show()
 
 # MAGIC %md
 # MAGIC - **Did you get similar output for the data in CSV storage? If not, what was the difference?**
-# MAGIC     - ???
+# MAGIC     - The output for the data in CSV storage was similar in terms of total number of rows, with the count matching the expected value after appending the new and modified rows. Still, the columns in the resultant DataFrame did not include all distinct columns from both the original and modified data. Only columns from the original schema were present; the new columns coming from the modified rows were either missing or their values were misaligned or merged into existing columns. This resulted in a 'broken' schema in which the data could not be reliably interpreted.
 # MAGIC
 # MAGIC - **What is your explanation/guess for why the CSV seems broken and the schema cannot be inferred anymore?**
-# MAGIC     - ???
+# MAGIC     - It looks like CSV storage is somewhat broken. CSV files don't enforce a schema, and columns are defined by the header row. When appending data with a different schema-that is, more or fewer columns-new rows may have additional fields or values for missing columns, which causes misalignment between columns and data. While reading merged CSV files, Spark will infer the schema from the first file, or header, and then ignore additional columns in other files, so after reading, columns are missing and data was parsed incorrectly. That's a common pitfall of appending heterogeneous data to the CSV storage.
 # MAGIC
 # MAGIC - **Did you get similar output for the data in Parquet storage, and which of the 2 alternatives? If not, what was the difference?**
-# MAGIC     - ???
+# MAGIC     - In the case of Parquet storage, the output for the number of rows was similar, but the handling of columns depended on exactly how Spark performed the merging of schemas. In some instances, only the original columns were present, with the new columns from modified data missing with values set to NULL. In others, Spark did merge the schemas and included all columns for both the original and modified data, but with NULL values for the new columns in the original rows. This corresponds to the two alternatives shown in the example output. Which of these will be the actual result depends on how Spark does its schema merging, and on the order in which files are being read.
 # MAGIC
 # MAGIC - **What is your explanation/guess for why not all 11 distinct columns are included in the data frame in the Parquet case?**
-# MAGIC     - ???
+# MAGIC     - The output Parquet DataFrame does not contain all 11 different columns because, by default, Spark might not merge the schema when it reads Parquet files. In other words, if schema merging is off, it will use the schema either from the first file or the original schema, considering only new columns added in subsequent files as null. For this reason, the additional columns from the modified data are missing and their values are not reachable. To have all columns, the 'mergeSchema' option should be true while reading Parquet files, which tells Spark to merge schemas of all files residing in the directory.
+
+# COMMAND ----------
+
+# 1. Did you get similar output for the data in CSV storage? If not, what was the difference?
+csv_paragraph = (
+    "The output for the data in CSV storage was similar in terms of the total number of rows, "
+    "as the count matched the expected value after appending the new and modified rows. "
+    "However, the columns in the resulting DataFrame did not include all the distinct columns from both the original and modified data. "
+    "Instead, only the columns from the original schema were present, and the new columns from the modified rows were either missing or their values were misaligned or merged into existing columns. "
+    "This resulted in a 'broken' schema where the data could not be reliably interpreted."
+)
+
+# 2. What is your explanation/guess for why the CSV seems broken and the schema cannot be inferred anymore?
+csv_explanation = (
+    "The CSV storage appears broken because CSV files do not enforce a schema and rely on the header row to define columns. "
+    "When appending data with a different schema (additional or missing columns), the new rows may have extra fields or missing values, "
+    "causing misalignment between columns and data. When reading the merged CSV files, Spark infers the schema from the first file or header, "
+    "ignoring extra columns in other files, which leads to missing columns and incorrect data parsing. "
+    "This is a common pitfall when appending heterogeneous data to CSV storage."
+)
+
+# 3. Did you get similar output for the data in Parquet storage, and which of the 2 alternatives? If not, what was the difference?
+parquet_paragraph = (
+    "For the Parquet storage, the output was similar in terms of row count, but the handling of columns depended on how Spark merged the schemas. "
+    "In some cases, only the original columns were present, with the new columns from the modified data missing and their values set to NULL. "
+    "In other cases, Spark merged the schemas and included all columns from both the original and modified data, but the values for the new columns were NULL in the original rows. "
+    "This corresponds to the two alternatives shown in the example output. The actual result depends on Spark's schema merging behavior and the order in which files are read."
+)
+
+# 4. What is your explanation/guess for why not all 11 distinct columns are included in the data frame in the Parquet case?
+parquet_explanation = (
+    "Not all 11 distinct columns are included in the Parquet DataFrame because, by default, Spark may not merge schemas when reading Parquet files. "
+    "If schema merging is not enabled, Spark uses the schema from the first file or the original schema, ignoring any new columns added in later files. "
+    "As a result, the additional columns from the modified data are omitted, and their values are not accessible. "
+    "To include all columns, the 'mergeSchema' option must be set to true when reading Parquet files, allowing Spark to combine schemas from all files in the directory."
+)
+
+# Display the answers as paragraphs
+for paragraph in [csv_paragraph, csv_explanation, parquet_paragraph, parquet_explanation]:
+    print(paragraph + "\n")
 
 # COMMAND ----------
 
@@ -640,7 +710,7 @@ getTestDF(modified_parquet_df).show()
 source_delta_folder: str = source_path + f"{data_name}_delta"
 
 # Read the original data in Delta format to a data frame
-df_delta: DataFrame = ???
+df_delta: DataFrame = spark.read.format("delta").load(source_delta_folder)
 
 # COMMAND ----------
 
@@ -656,7 +726,7 @@ printStorage(source_delta_folder)
 target_file_delta: str = target_path + data_name + "_delta"
 
 # write the data from df_delta using the Delta format to the path given by target_file_delta
-???
+df_delta.write.format("delta").mode("overwrite").save(target_file_delta)
 
 # COMMAND ----------
 
@@ -711,20 +781,19 @@ printStorage(target_file_delta)
 # COMMAND ----------
 
 # Append the new rows using the same schema, from df_new_rows_los_angeles and df_new_rows_chicago, to the Delta storage:
-???
-
+df_new_rows_los_angeles.write.format("delta").mode("append").save(target_file_delta)
+df_new_rows_chicago.write.format("delta").mode("append").save(target_file_delta)
 
 # By default, Delta is similar to Parquet in that it assumes the data schema to stay the same. However, we can enable it to handle schema modifications.
 spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", True)
 
-
 # Append the new rows using the modified schema, df_modified, to the Delta storage:
-???
+df_modified.write.format("delta").mode("append").save(target_file_delta)
 
 # COMMAND ----------
 
 # Read the merged data from Delta storage to check that the new rows have been stored
-modified_delta_df: DataFrame = ???
+modified_delta_df: DataFrame = spark.read.format("delta").load(target_file_delta)
 
 # COMMAND ----------
 
@@ -781,10 +850,8 @@ delta_table_file: str = target_path + data_name + "_deltatable_small"
 df_delta_small: DataFrame = getTestDF(modified_delta_df, ["Z1"], 3) \
     .drop("Description", "End_Time", "County", "AddedColumn1", "AddedColumn2")
 
-
 # Write the new small data frame to storage in Delta format to path based on delta_table_file
-???
-
+df_delta_small.write.format("delta").mode("overwrite").save(delta_table_file)
 
 # Create Delta table based on your target folder
 deltatable: DeltaTable = DeltaTable.forPath(spark, delta_table_file)
@@ -813,7 +880,12 @@ df_delta_update: DataFrame = df_new_rows_los_angeles \
 
 
 # code for updating the deltatable with df_delta_update
-???
+deltatable.alias("target").merge(
+    df_delta_update.alias("source"),
+    "target.ID = source.ID"
+).whenMatchedUpdateAll() \
+ .whenNotMatchedInsertAll() \
+ .execute()
 
 
 # Show the data after the merge
@@ -836,10 +908,12 @@ deltatable.toDF().sort(F.desc("Start_Time")).show()
 # COMMAND ----------
 
 # code for updating the deltatable with the Celsius temperature values
-???
+deltatable.update(
+    set={"Temperature_C": (F.col("Temperature_F") - 32) * 5 / 9}
+)
 
 # code for removing rows where the temperature is below -12 Celsius degrees from the deltatable
-???
+deltatable.delete("Temperature_C < -12")
 
 # Show the data after the second update
 print(f"== After the second update, the size of Delta storage is {folderSizeInKB(delta_table_file)} kB and contains {deltatable.toDF().count()} rows.")
@@ -969,7 +1043,10 @@ deltatable.toDF().sort(F.desc("Start_Time")).show()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ???
+# MAGIC Parquet is a columnar and compressed format, so it usually takes up much less space and will load much faster in Spark than CSV. It also stores data types internally, so Spark doesn't have to guess the schema every time, which makes the processing much more reliable. CSV, on the other hand, is just plain text. That makes it easy to read and edit using simple tools, but it tends to be larger, slower to load, and less structured. The biggest downsides of Parquet are that it's not human-readable and not as widely supported as CSV. You would use CSV when you want something simple that can be opened anywhere, or when you're exchanging data with tools or people who don't support Parquet.
+# MAGIC
+# MAGIC
+# MAGIC Besides CSV, Parquet, and Delta, Spark supports many other file formats like JSON, Avro, ORC, and plain text files. In addition, Spark can read from many data sources besides files. For example, it can load data from various databases, such as MySQL, PostgreSQL, and SQL Server. It can also connect to cloud storage systems like S3 (AWS) and Azure Blob Storage, message systems such as Kafka, and NoSQL databases such as Cassandra, MongoDB.
 
 # COMMAND ----------
 
@@ -987,4 +1064,6 @@ deltatable.toDF().sort(F.desc("Start_Time")).show()
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ???
+# MAGIC This topic was also a bit new to me that I had to use some AI to solve some parts of the exercise. That being said, I used some code assistant from databricks plus claude sonnet 4.5 to help me out. And finally, most of the codes were written by assistant and i tried to understant and debug them after code completion.
+# MAGIC
+# MAGIC I also did this exercise solo.
